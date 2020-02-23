@@ -1,9 +1,6 @@
-#[path = "rules.rs"]
-mod rules;
-
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
 use dns_lookup;
-use rules::{Protocol, Rule};
+use crate::rules::{Protocol, Rule};
 
 
 /// Parse command line arguments
