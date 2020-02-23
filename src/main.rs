@@ -1,12 +1,15 @@
 mod cli;
 
-use dns_lookup::lookup_host;
-use std::net::IpAddr;
+use std::net::Ipv4Addr;
+use std::env;
 
 fn main() {
-    let hostname = "www.reddit.com";
-    let ips: Vec<IpAddr> = lookup_host(hostname).unwrap();
-    for ip in ips {
-        println!("found ip: {:?}", ip);
+    // bind address is initially localhost
+    let mut bind_address = Ipv4Addr::LOCALHOST;
+    let rules = cli::parse_args(env::args().collect(), &mut bind_address);
+    for rule in rules.into_iter() {
+        println!("{:?}", rule);
     }
+
+    println!("\nbind_address: {:?}", bind_address);
 }
