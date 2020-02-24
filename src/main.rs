@@ -46,7 +46,7 @@ fn main() {
     let mut udp_sockets: Vec<net::UdpSocket> = Vec::with_capacity(rules.len());
 
     // queue of incomming tcp streams
-    let mut tcp_incomming: Vec<net::TcpStream> = Vec::with_capacity(512);
+    let mut tcp_connections: Vec<net::TcpStream> = Vec::with_capacity(512);
 
     // vector holding active workers
     let mut active_workers: Vec<ActiveWorker> = Vec::with_capacity(max_workers);
@@ -88,7 +88,7 @@ fn main() {
         for listener in &tcp_listeners {
             for stream in listener.incoming() {
                 match stream {
-                    Ok(s) => tcp_incomming.push(s),
+                    Ok(s) => tcp_connections.push(s),
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         break;
                     },
@@ -96,18 +96,29 @@ fn main() {
                 }
             }
 
-            let initial_incomming_queue_size = tcp_incomming.len();
+            let initial_incomming_queue_size = tcp_connections.len();
             let iteration: usize = 0;
-            while !tcp_incomming.is_empty() && iteration < initial_incomming_queue_size {
+            while !tcp_connections.is_empty() && iteration < initial_incomming_queue_size {
                 // pop from front
-                let stream = tcp_incomming.remove(0);
+                let stream = tcp_connections.remove(0);
+
+                // check for bytes to be read, discard the connection on error
+                let mut buf = [0; 10];
+                let res = stream.peek(&mut buf);
+                if res.is_err() { continue; }
+
+                if res.unwrap() < 1 {
+                    // there are no bytes to be read
+                    tcp_connections.push(stream);
+                    continue;
+                }
 
                 let avail_worker_index = match get_idle_worker(&active_workers) {
                     Some(index) => index,
                     None => {
                         // no available workers, push to the end of the queue
                         // will be handled next iteration of main loop
-                        tcp_incomming.push(stream);
+                        tcp_connections.push(stream);
                         continue;
                     }
                 };
@@ -143,6 +154,11 @@ fn main() {
                 match worker.receiver.try_recv() {
                     Ok(msg) => {
                         match msg {
+                            WorkerMsgOutbound::ReturnTcp(tcp_stream) => {
+                                // return the tcp stream to the queue
+                                tcp_connections.push(tcp_stream);
+                            }
+
                             WorkerMsgOutbound::ReturnUdp(udp_sock) => {
                                 // return the udp socket to the queue
                                 udp_sockets.push(udp_sock);

@@ -6,7 +6,7 @@ use std::io::prelude::*;
 use std::io;
 use crate::rules::{Protocol, Rule};
 
-const TCP_INACTIVITY_TIMEOUT: u128 = 10000; //ms
+const TCP_INACTIVITY_TIMEOUT: u128 = 100; //ms
 const SET_TIMEOUT_FAIL: &str = "Failed to set socket read timeout";
 const REMOTE_CONNECT_TIMEOUT: u64 = 5000; //ms
 
@@ -23,6 +23,9 @@ pub enum WorkerMsgInbound {
 pub enum WorkerMsgOutbound {
     // the worker is done
     Done,
+
+    // the worker is done with this Tcp Stream
+    ReturnTcp(TcpStream),
 
     // the worker is done with this udp socket
     ReturnUdp(UdpSocket)
@@ -44,7 +47,10 @@ impl Worker {
                 let msg = rx.recv().unwrap();
                 match msg {
                     WorkerMsgInbound::HandleTcp(stream) => {
-                        handle_tcp(stream, &rules);
+                        match handle_tcp(stream, &rules) {
+                            Some(s) => tx.send(WorkerMsgOutbound::ReturnTcp(s)).unwrap(),
+                            None => ()
+                        }
                     },
                     WorkerMsgInbound::HandleUdp(socket) => {
                         // when finished handling the udp socket it is returned
@@ -68,16 +74,19 @@ impl Worker {
 /// 
 /// TCPStream is read from and forwarded to the destination specified by a matching rule,
 /// until the read() function encounters an error of any kind.
-fn handle_tcp (mut stream: TcpStream, rules: &Vec<Rule>) {
+/// 
+/// Returns the TcpStream if it is to be returned to the main thread (it is idle)
+/// Returns None if an error was encountered and the stream was discarded.
+fn handle_tcp (mut stream: TcpStream, rules: &Vec<Rule>) -> Option<TcpStream> {
     // match with a rule
     let local_addr = match stream.local_addr() {
         Ok(addr) => addr,
-        Err(_) => { return; }
+        Err(_) => { return None; }
     };
 
     let rule = match match_rule(Protocol::TCP, local_addr.port(), rules) {
         Some(rule) => rule,
-        None => { return; }
+        None => { return None; }
     };
 
     // connect to rule's target address
@@ -86,7 +95,7 @@ fn handle_tcp (mut stream: TcpStream, rules: &Vec<Rule>) {
         Duration::from_millis(REMOTE_CONNECT_TIMEOUT)
     ) {
         Ok(s) => s,
-        Err(_) => { return; }
+        Err(_) => { return None; }
     };
 
     // set read timeouts
@@ -105,20 +114,20 @@ fn handle_tcp (mut stream: TcpStream, rules: &Vec<Rule>) {
         // read from inbound stream
 
         if is_unexpected_err(stream.read_to_end(&mut inbound_buf)) {
-            break;
+            return None;
         }
 
         // forward data
-        if outbound_stream.write_all(&mut inbound_buf).is_err() { break; }
-        if outbound_stream.flush().is_err() { break; }
+        if outbound_stream.write_all(&mut inbound_buf).is_err() { return None; }
+        if outbound_stream.flush().is_err() { return None; }
 
         // read from outbound stream
 
-        if is_unexpected_err(outbound_stream.read_to_end(&mut outbound_buf)) { break; }
+        if is_unexpected_err(outbound_stream.read_to_end(&mut outbound_buf)) { return None; }
 
         // forward data
-        if stream.write_all(&mut outbound_buf).is_err() { break; }
-        if stream.flush().is_err() { break; }
+        if stream.write_all(&mut outbound_buf).is_err() { return None; }
+        if stream.flush().is_err() { return None; }
 
         let bytes_transfered = inbound_buf.len() + outbound_buf.len();
         if bytes_transfered > 0 {
@@ -131,6 +140,8 @@ fn handle_tcp (mut stream: TcpStream, rules: &Vec<Rule>) {
                 break;
         }
     }
+
+    Some(stream)
 }
 
 /// Called by a worker to handle a udp socket
