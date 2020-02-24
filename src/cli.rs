@@ -8,12 +8,13 @@ use crate::rules::{Protocol, Rule};
 /// 
 /// Rule syntax: --<tcp|udp> <incomming port>:<target host/ip>:<target port>
 /// Rule example: --tcp 8080:www.reddit.com:80
-pub fn parse_args(args: Vec<String>, bind_addr: &mut Ipv4Addr) -> Option<Vec<Rule>> {
+pub fn parse_args(args: Vec<String>, bind_addr: &mut Ipv4Addr, max_workers: &mut usize) -> Option<Vec<Rule>> {
     let invalid_rule_syntax = &"Invalid rule syntax. See --help.";
 
     let mut parsed_rules: Vec<Rule> = Vec::with_capacity(8);
     let mut expect_rule: &Option<Protocol> = &None;
     let mut expect_bind_addr = false;
+    let mut expect_max_workers = false;
     for token in args.into_iter() {
         if token == "--help" {
             print_help();
@@ -35,6 +36,11 @@ pub fn parse_args(args: Vec<String>, bind_addr: &mut Ipv4Addr) -> Option<Vec<Rul
             continue;
         }
 
+        if token == "--max-workers" {
+            expect_max_workers = true;
+            continue;
+        }
+
         if expect_bind_addr {
             // set the bind address
             let new_bind_addr: Ipv4Addr = match token.parse() {
@@ -48,6 +54,21 @@ pub fn parse_args(args: Vec<String>, bind_addr: &mut Ipv4Addr) -> Option<Vec<Rul
             *bind_addr = new_bind_addr;
 
             expect_bind_addr = false;
+            continue;
+        }
+
+        if expect_max_workers {
+            // set max workers
+            let new_max_workers: usize = match token.parse() {
+                Ok(count) => count,
+                Err(_) => {
+                    printerr("Invalid maximum number of workers, expected unsigned int.");
+                    return None;
+                }
+            };
+
+            *max_workers = new_max_workers;
+            expect_max_workers = false;
             continue;
         }
 
@@ -197,9 +218,10 @@ mod tests {
     #[test]
     fn test_parse_args() {
         let mut bind_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let mut max_workers = 4;
 
         // Given help it should return None
-        let res = parse_args(vec!["--help".to_owned()], &mut bind_addr);
+        let res = parse_args(vec!["--help".to_owned()], &mut bind_addr, &mut max_workers);
         assert_eq!(res, None);
 
         // Given help with a rule it should still return None
@@ -207,7 +229,7 @@ mod tests {
             "--help".to_owned(),
             "--tcp".to_owned(),
             "1234:12.22.32.43:8080".to_owned()
-        ], &mut bind_addr);
+        ], &mut bind_addr, &mut max_workers);
 
         assert_eq!(res, None);
 
@@ -219,7 +241,7 @@ mod tests {
             "8000:localhost:80".to_owned(),
             "--udp".to_owned(),
             "1234:212.53.12.49:2550".to_owned()
-        ], &mut bind_addr);
+        ], &mut bind_addr, &mut max_workers);
 
         let spec: Vec<Rule> = vec![
             Rule {
@@ -241,10 +263,10 @@ mod tests {
 
         assert_eq!(res.unwrap(), spec);
 
-        // Change the bind address
+        // Change the bind address and max workers
         assert_eq!("127.0.0.1".parse(), Ok(bind_addr));
         let new_addr = "128.129.130.131";
-        parse_args(vec!["--bind".to_owned(), new_addr.to_owned()], &mut bind_addr);
+        parse_args(vec!["--bind".to_owned(), new_addr.to_owned()], &mut bind_addr, &mut max_workers);
         assert_eq!(new_addr.parse(), Ok(bind_addr));
     }
 }

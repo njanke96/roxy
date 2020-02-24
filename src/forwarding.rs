@@ -1,5 +1,5 @@
 use std::thread;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::net::{TcpStream, UdpSocket};
 use crate::rules::Rule;
 
@@ -14,54 +14,58 @@ pub enum WorkerMsgInbound {
 
 /// Data type sent by a worker's tx
 pub enum WorkerMsgOutbound {
-    // the worker is busy
-    Busy,
-
-    // the worker is free
-    Free,
+    // the worker is done
+    Done,
 
     // the worker is done with this udp socket
     ReturnUdp(UdpSocket)
 }
 
 /// A worker responsible for handling packet forwarding
-pub struct Worker<'a> {
-    rules: &'a Vec<Rule>,
-    thread_handle: thread::JoinHandle<()>
-}
+pub struct Worker {}
 
-impl<'a> Worker<'a> {
+impl Worker {
+    /// Create a new worker and return its JoinHandle
     pub fn new (
-        rules: &Vec<Rule>,
+        rules: Arc<Vec<Rule>>,
         tx: mpsc::Sender<WorkerMsgOutbound>,
         rx: mpsc::Receiver<WorkerMsgInbound>
-    ) -> Worker {
+    ) -> thread::JoinHandle<()> {
         let thr = thread::spawn(move || {
             loop {
                 let msg = rx.recv().unwrap();
-                tx.send(WorkerMsgOutbound::Busy).unwrap();
                 match msg {
-                    WorkerMsgInbound::HandleTcp(stream) => handle_tcp(stream),
+                    WorkerMsgInbound::HandleTcp(stream) => {
+                        handle_tcp(stream, &rules);
+                    },
                     WorkerMsgInbound::HandleUdp(socket) => {
                         // when finished handling the udp socket it is returned
                         handle_udp(&socket);
                         tx.send(WorkerMsgOutbound::ReturnUdp(socket)).unwrap();
                     }
                 }
-                tx.send(WorkerMsgOutbound::Free).unwrap();
+
+                // signal that we are done
+                tx.send(WorkerMsgOutbound::Done).unwrap();
             }
         });
 
-        Worker {
-            rules,
-            thread_handle: thr
-        }
+        thr
     }
 }
 
 /// Called by a worker to handle a tcp stream
-fn handle_tcp (stream: TcpStream) {
+/// 
+/// TCPStream is read from and forwarded to the destination specified by a matching rule,
+/// until the read() function encounters an error of any kind.
+fn handle_tcp (stream: TcpStream, rules: &Vec<Rule>) {
+    // enforce non-blocking mode
+    stream.set_nonblocking(false).expect("Failed to enforce non-blocking mode.");
 
+    // match with a rule
+    for rule in rules {
+        println!("{:?}", rule);
+    }
 }
 
 /// Called by a worker to handle a udp socket
