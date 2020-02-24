@@ -1,4 +1,5 @@
 use std::thread;
+use std::time::Duration;
 use std::sync::{mpsc, Arc};
 use std::net::{TcpStream, UdpSocket};
 use crate::rules::Rule;
@@ -47,6 +48,8 @@ impl Worker {
 
                 // signal that we are done
                 tx.send(WorkerMsgOutbound::Done).unwrap();
+
+                thread::sleep(Duration::from_millis(1));
             }
         });
 
