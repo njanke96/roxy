@@ -9,7 +9,7 @@
             "type": "lldb",
             "request": "launch",
             "program": "${workspaceRoot}/target/debug/roxy",
-            "args": ["--tcp", "8000:metar.cc:80", "--udp", "34254:127.0.0.1:31337"],
+            "args": ["--udp", "19132:mc.intocmd.com:19132", "--tcp", "19132:mc.intocmd.com:19132", "--bind", "192.168.1.178", "--debug"],
             "cwd": "${workspaceRoot}",
             "env": {"RUST_BACKTRACE": "1"}
         }

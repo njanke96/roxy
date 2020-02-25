@@ -10,6 +10,7 @@ use crate::cli;
 const TCP_INACTIVITY_TIMEOUT: u128 = 100; //ms
 const SET_TIMEOUT_FAIL: &str = "Failed to set socket read timeout";
 const REMOTE_CONNECT_TIMEOUT: u64 = 5000; //ms
+const UDP_BUF_MAX: usize = 65535;
 
 /// Data type received by a worker's rx
 pub enum WorkerMsgInbound {
@@ -173,28 +174,26 @@ fn handle_udp (mut stated_socket: StatedUdpSocket, rules: &Vec<Rule>) -> StatedU
         None => { return stated_socket; }
     };
 
-    // read all there is to read
-    let mut buf = [0; 32768];
-    let mut last_len = 1;
-    let mut from_addr: Option<SocketAddr> = None;
-    while last_len > 0 {
-        let res = stated_socket.socket.recv_from(&mut buf);
+    // read one datagram
+    let mut buf = [0; UDP_BUF_MAX];
+    let res = stated_socket.socket.recv_from(&mut buf);
 
-        // wouldblock, empty, other
-        if res.is_err() { break; }
+    match res {
+        Err(_) => {
+            // no more data to read
+            return stated_socket;
+        },
 
-        let (len, from) = res.unwrap();
-        last_len = len;
-        from_addr = Some(from);
+        _ => ()
     }
 
-    if buf.len() < 1 || from_addr == None {
-        // no data
-        return stated_socket;
-    }
+    let (len, from) = res.unwrap();
+
+    // trim null bytes off the end
+    let buf = &buf[0..len];
 
     // get the socket address of the sender
-    let from = match from_addr.unwrap() {
+    let from = match from {
         SocketAddr::V4(addr) => addr,
         _ => { return stated_socket; }
     };
@@ -225,7 +224,8 @@ fn handle_udp (mut stated_socket: StatedUdpSocket, rules: &Vec<Rule>) -> StatedU
         Err(e) => cli::printerr(&format!("Supressed an error while sending UDP packet: {}", e))
     }
 
-    stated_socket
+    // there is still data to be read
+    handle_udp(stated_socket, &rules)
 }
 
 /// Match a rule by port, returning a Rule or None
