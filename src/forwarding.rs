@@ -107,6 +107,8 @@ fn handle_tcp (mut stream: TcpStream, rules: &Vec<Rule>) -> Option<TcpStream> {
         Err(_) => { return None; }
     };
 
+    cli::d_print(format!("Established TCP connection with {:?}", rule.target_address));
+
     // set read timeouts
     let timeout = Some(Duration::from_millis(5));
     stream.set_read_timeout(timeout).expect(SET_TIMEOUT_FAIL);
@@ -130,6 +132,8 @@ fn handle_tcp (mut stream: TcpStream, rules: &Vec<Rule>) -> Option<TcpStream> {
         if outbound_stream.write_all(&mut inbound_buf).is_err() { return None; }
         if outbound_stream.flush().is_err() { return None; }
 
+        cli::d_print(format!("[TCP] {} -> {:?}", rule.listen_port, rule.target_address));
+
         // read from outbound stream
 
         if is_unexpected_err(outbound_stream.read_to_end(&mut outbound_buf)) { return None; }
@@ -137,6 +141,8 @@ fn handle_tcp (mut stream: TcpStream, rules: &Vec<Rule>) -> Option<TcpStream> {
         // forward data
         if stream.write_all(&mut outbound_buf).is_err() { return None; }
         if stream.flush().is_err() { return None; }
+
+        cli::d_print(format!("[TCP] {} <- {:?}", rule.listen_port, rule.target_address));
 
         let bytes_transfered = inbound_buf.len() + outbound_buf.len();
         if bytes_transfered > 0 {
@@ -200,12 +206,14 @@ fn handle_udp (mut stated_socket: StatedUdpSocket, rules: &Vec<Rule>) -> StatedU
         if stated_socket.last_client != None {
             let last_client = stated_socket.last_client.unwrap();
             send_res = stated_socket.socket.send_to(&buf, last_client);
+            cli::d_print(format!("[UDP] {:?} <- {:?}", last_client, from));
         } else {
             return stated_socket;
         }
     } else {
         // datagram is not coming from the target, so send it to the target
         send_res = stated_socket.socket.send_to(&buf, rule.target_address);
+        cli::d_print(format!("[UDP] {:?} -> {:?}", from, rule.target_address));
 
         // record this address as the most recent client
         stated_socket.last_client = Some(from);

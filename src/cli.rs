@@ -1,6 +1,8 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
+use std::env;
 use dns_lookup;
 use crate::rules::{Protocol, Rule};
+use crate::VAR_DEBUG_MODE;
 
 
 /// Parse command line arguments
@@ -198,15 +200,25 @@ pub fn printerr(message: &str) {
     println!("roxy: {}", message);
 }
 
+/// Print if in debug mode
+pub fn d_print(message: String) {
+    let v = env::var(VAR_DEBUG_MODE);
+    if v.is_ok() {
+        if v.unwrap() != "0" {
+            println!("{}", message);
+        }
+    }
+}
+
 /// Print help message
 fn print_help() {
     let help = "ROXY Help:\n\n\
-        Command-line usage: roxy <rules> [--bind <address>]\n\
+        Command-line usage: roxy <rules> [--bind <address>] [--max-workers <#] [--debug]\n\
         Rule Syntax: --<tcp|udp> <incomming port>:<target host/ip>:<target port>\n\n\
         Example: roxy --tcp 8080:localhost:80\n\
         Example: roxy --udp 3443:192.0.0.1:2550 --bind 100.101.102.103\n\n\
         Note: UDP rules can only support one client per proxy port. Specify multiple rules \
-        if you need to support multiple bi-directional UDP channels.";
+        if you need to support multiple bi-directional UDP channels.\n";
     print!("{}", help);
 }
 

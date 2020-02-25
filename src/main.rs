@@ -12,6 +12,8 @@ use rules::Protocol;
 
 const NON_BLOCKING_FAIL: &str = "Failed to enforce non-blocking mode";
 
+pub const VAR_DEBUG_MODE: &str = "ROXY_DEBUG";
+
 struct ActiveWorker {
     handle: thread::JoinHandle<()>,
 
@@ -25,6 +27,13 @@ struct ActiveWorker {
 }
 
 fn main() {
+    // set debug mode?
+    for arg in env::args() {
+        if arg == "--debug" {
+            env::set_var(VAR_DEBUG_MODE, "1");
+        }
+    }
+
     // bind address is initially localhost
     let mut bind_address = net::Ipv4Addr::LOCALHOST;
 
