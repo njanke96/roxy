@@ -71,8 +71,6 @@ impl Worker {
 
                 // signal that we are done
                 tx.send(WorkerMsgOutbound::Done).unwrap();
-
-                thread::sleep(Duration::from_millis(1));
             }
         });
 
