@@ -5,6 +5,7 @@ use std::net::{TcpStream, UdpSocket, SocketAddr, SocketAddrV4};
 use std::io::prelude::*;
 use std::io;
 use crate::rules::{Protocol, Rule};
+use crate::cli;
 
 const TCP_INACTIVITY_TIMEOUT: u128 = 100; //ms
 const SET_TIMEOUT_FAIL: &str = "Failed to set socket read timeout";
@@ -167,17 +168,16 @@ fn handle_udp (mut stated_socket: StatedUdpSocket, rules: &Vec<Rule>) -> StatedU
     };
 
     // read all there is to read
-    let mut buf = [0; 65535];
+    let mut buf = [0; 32768];
     let mut last_len = 1;
     let mut from_addr: Option<SocketAddr> = None;
     while last_len > 0 {
-        // hangs here!
         let res = stated_socket.socket.recv_from(&mut buf);
-        if res.is_err() {
-            break;
-        }
-        let (len, from) = res.unwrap();
 
+        // wouldblock, empty, other
+        if res.is_err() { break; }
+
+        let (len, from) = res.unwrap();
         last_len = len;
         from_addr = Some(from);
     }
@@ -193,18 +193,28 @@ fn handle_udp (mut stated_socket: StatedUdpSocket, rules: &Vec<Rule>) -> StatedU
         _ => { return stated_socket; }
     };
 
+    let send_res: Result<usize, std::io::Error>;
+
     if from == rule.target_address {
         // datagram is coming from the target, attempt to send it to the most recent client
         if stated_socket.last_client != None {
             let last_client = stated_socket.last_client.unwrap();
-            stated_socket.socket.send_to(&buf, last_client).ok();
+            send_res = stated_socket.socket.send_to(&buf, last_client);
+        } else {
+            return stated_socket;
         }
     } else {
         // datagram is not coming from the target, so send it to the target
-        stated_socket.socket.send_to(&buf, rule.target_address).ok();
+        send_res = stated_socket.socket.send_to(&buf, rule.target_address);
 
         // record this address as the most recent client
         stated_socket.last_client = Some(from);
+    }
+
+    // check result
+    match send_res {
+        Ok(_) => (),
+        Err(e) => cli::printerr(&format!("Supressed an error while sending UDP packet: {}", e))
     }
 
     stated_socket

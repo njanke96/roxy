@@ -71,6 +71,10 @@ fn main() {
                 let sock = net::UdpSocket::bind(bind_socket_addr)
                     .expect(format!("Failed to bind to {:?} (UDP)", bind_socket_addr).as_str());
 
+                // set timeout
+                let timeout = Some(Duration::from_millis(5));
+                sock.set_read_timeout(timeout).unwrap();
+
                 udp_sockets.push(StatedUdpSocket {
                     socket: sock,
                     last_client: None
@@ -149,7 +153,6 @@ fn main() {
             // pop from front
             let sock = udp_sockets.remove(0);
 
-            /* ** Causes hang. bug?
             // check for bytes to be read
             let mut buf = [0; 10];
             let len = match sock.socket.peek_from(&mut buf) {
@@ -166,7 +169,6 @@ fn main() {
                 udp_sockets.push(sock);
                 continue;
             }
-            */
 
             let avail_worker_index = match get_idle_worker(&active_workers) {
                 Some(index) => index,
