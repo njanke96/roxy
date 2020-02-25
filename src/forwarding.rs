@@ -224,8 +224,8 @@ fn handle_udp (mut stated_socket: StatedUdpSocket, rules: &Vec<Rule>) -> StatedU
         Err(e) => cli::printerr(&format!("Supressed an error while sending UDP packet: {}", e))
     }
 
-    // there is still data to be read
-    handle_udp(stated_socket, &rules)
+    // there is still data to be read, it will be picked up by another worker
+    stated_socket
 }
 
 /// Match a rule by port, returning a Rule or None
