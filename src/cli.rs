@@ -204,8 +204,9 @@ fn print_help() {
         Command-line usage: roxy <rules> [--bind <address>]\n\
         Rule Syntax: --<tcp|udp> <incomming port>:<target host/ip>:<target port>\n\n\
         Example: roxy --tcp 8080:localhost:80\n\
-        Example: roxy --udp 3443:192.0.0.1:2550 --bind 100.101.102.103\n";
-
+        Example: roxy --udp 3443:192.0.0.1:2550 --bind 100.101.102.103\n\n\
+        Note: UDP rules can only support one client per proxy port. Specify multiple rules \
+        if you need to support multiple bi-directional UDP channels.";
     print!("{}", help);
 }
 
