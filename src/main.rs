@@ -7,7 +7,7 @@ use std::env;
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
-use forwarding::{Worker, WorkerMsgInbound, WorkerMsgOutbound};
+use forwarding::{Worker, WorkerMsgInbound, WorkerMsgOutbound, StatedUdpSocket};
 use rules::Protocol;
 
 const NON_BLOCKING_FAIL: &str = "Failed to enforce non-blocking mode";
@@ -43,7 +43,7 @@ fn main() {
 
     // vectors holding non-blocking TcpListeners, and UdpSockets bound according to rules
     let mut tcp_listeners: Vec<net::TcpListener> = Vec::with_capacity(rules.len());
-    let mut udp_sockets: Vec<net::UdpSocket> = Vec::with_capacity(rules.len());
+    let mut udp_sockets: Vec<StatedUdpSocket> = Vec::with_capacity(rules.len());
 
     // queue of incomming tcp streams
     let mut tcp_connections: Vec<net::TcpStream> = Vec::with_capacity(512);
@@ -51,6 +51,7 @@ fn main() {
     // vector holding active workers
     let mut active_workers: Vec<ActiveWorker> = Vec::with_capacity(max_workers);
 
+    // add rules
     for i in 0..rules.len() {
         let rule = &rules[i];
 
@@ -70,7 +71,10 @@ fn main() {
                 let sock = net::UdpSocket::bind(bind_socket_addr)
                     .expect(format!("Failed to bind to {:?} (UDP)", bind_socket_addr).as_str());
 
-                udp_sockets.push(sock);
+                udp_sockets.push(StatedUdpSocket {
+                    socket: sock,
+                    last_client: None
+                });
             }
         }
     }
@@ -84,7 +88,7 @@ fn main() {
 
     // main loop
     loop {
-        // check for new tcp connections and handle them
+        // check for new tcp connections and queue them
         for listener in &tcp_listeners {
             for stream in listener.incoming() {
                 match stream {
@@ -95,56 +99,91 @@ fn main() {
                     Err(e) => panic!("Unexpected IO error: {}", e),
                 }
             }
+        }
 
-            let initial_incomming_queue_size = tcp_connections.len();
-            let iteration: usize = 0;
-            while !tcp_connections.is_empty() && iteration < initial_incomming_queue_size {
-                // pop from front
-                let stream = tcp_connections.remove(0);
+        // process the tcp connection queue
+        let initial_incomming_queue_size = tcp_connections.len();
+        let mut iteration: usize = 0;
+        while !tcp_connections.is_empty() && iteration < initial_incomming_queue_size {
+            iteration += 1;
 
-                // check for bytes to be read, discard the connection on error
-                let mut buf = [0; 10];
-                let res = stream.peek(&mut buf);
-                if res.is_err() { continue; }
+            // pop from front
+            let stream = tcp_connections.remove(0);
 
-                if res.unwrap() < 1 {
-                    // there are no bytes to be read
+            // check for bytes to be read, discard the connection on error
+            let mut buf = [0; 10];
+            let res = stream.peek(&mut buf);
+            if res.is_err() { continue; }
+
+            if res.unwrap() < 1 {
+                // there are no bytes to be read
+                tcp_connections.push(stream);
+                continue;
+            }
+
+            let avail_worker_index = match get_idle_worker(&active_workers) {
+                Some(index) => index,
+                None => {
+                    // no available workers, push to the end of the queue
+                    // will be handled next iteration of main loop
                     tcp_connections.push(stream);
                     continue;
                 }
+            };
 
-                let avail_worker_index = match get_idle_worker(&active_workers) {
-                    Some(index) => index,
-                    None => {
-                        // no available workers, push to the end of the queue
-                        // will be handled next iteration of main loop
-                        tcp_connections.push(stream);
-                        continue;
-                    }
-                };
+            let avail_worker = active_workers.remove(avail_worker_index);
+            dispatch_worker(
+                avail_worker,
+                WorkerMsgInbound::HandleTcp(stream),
+                Arc::clone(&rules),
+                &mut active_workers
+            );
+        }
 
-                let mut avail_worker = active_workers.remove(avail_worker_index);
-                avail_worker.is_idle = false;
-                let res = avail_worker.sender.send(WorkerMsgInbound::HandleTcp(stream));
-                match res {
-                    Err(s) => {
-                        // the worker died, replace it
-                        let mut new_worker = replace_dead_worker(avail_worker, Arc::clone(&rules));
-                        new_worker.is_idle = false;
+        // process the udp socket queue
+        let initial_udp_queue_size = udp_sockets.len();
+        let mut iteration: usize = 0;
+        while !udp_sockets.is_empty() && iteration < initial_udp_queue_size {
+            iteration += 1;
 
-                        // try again, this time panicking on fail
-                        new_worker.sender.send(s.0)
-                            .expect("Failed twice to pass a message to a worker thread");
-                        
-                        active_workers.push(new_worker);
-                    },
+            // pop from front
+            let sock = udp_sockets.remove(0);
 
-                    _ => {
-                        // push the worker back into active_workers
-                        active_workers.push(avail_worker);
-                    }
+            /* ** Causes hang. bug?
+            // check for bytes to be read
+            let mut buf = [0; 10];
+            let len = match sock.socket.peek_from(&mut buf) {
+                Ok(res) => res.0,
+                Err(_) => {
+                    // keep the udp socket in the queue
+                    udp_sockets.push(sock);
+                    continue;
                 }
+            };
+
+            if len < 1 {
+                // no bytes to be read
+                udp_sockets.push(sock);
+                continue;
             }
+            */
+
+            let avail_worker_index = match get_idle_worker(&active_workers) {
+                Some(index) => index,
+                None => {
+                    // no available workers
+                    udp_sockets.push(sock);
+                    continue;
+                }
+            };
+
+            let avail_worker = active_workers.remove(avail_worker_index);
+            dispatch_worker(
+                avail_worker,
+                WorkerMsgInbound::HandleUdp(sock),
+                Arc::clone(&rules),
+                &mut active_workers
+            );
         }
 
         // handle incomming messages from active workers
@@ -184,6 +223,7 @@ fn main() {
             active_workers.push(worker);
         }
 
+        // throttle
         thread::sleep(Duration::from_millis(1));
     }
 
@@ -210,6 +250,36 @@ fn create_worker(rules: Arc<Vec<rules::Rule>>) -> ActiveWorker {
         sender: ib_tx,
         receiver: ob_rx,
         is_idle: true
+    }
+}
+
+
+/// Dispatch a worker with a message, requires an Arc to rules, 
+/// and mutable reference to active_workers
+fn dispatch_worker(mut worker: ActiveWorker, 
+    msg: WorkerMsgInbound, 
+    rules: Arc<Vec<rules::Rule>>, 
+    active_workers: &mut Vec<ActiveWorker>)
+{
+    worker.is_idle = false;
+    let res = worker.sender.send(msg);
+    match res {
+        Err(s) => {
+            // the worker died, replace it
+            let mut new_worker = replace_dead_worker(worker, Arc::clone(&rules));
+            new_worker.is_idle = false;
+
+            // try again, this time panicking on fail
+            new_worker.sender.send(s.0)
+                .expect("Failed twice to pass a message to a worker thread");
+            
+            active_workers.push(new_worker);
+        },
+
+        _ => {
+            // push the worker back into active_workers
+            active_workers.push(worker);
+        }
     }
 }
 

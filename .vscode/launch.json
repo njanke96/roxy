@@ -9,7 +9,7 @@
             "type": "lldb",
             "request": "launch",
             "program": "${workspaceRoot}/target/debug/roxy",
-            "args": ["--tcp", "8000:metar.cc:80"],
+            "args": ["--tcp", "8000:metar.cc:80", "--udp", "20000:127.0.0.1:31337"],
             "cwd": "${workspaceRoot}",
         }
     ]

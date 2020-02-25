@@ -1,7 +1,7 @@
 use std::thread;
 use std::time::{SystemTime, Duration};
 use std::sync::{mpsc, Arc};
-use std::net::{TcpStream, UdpSocket, SocketAddr};
+use std::net::{TcpStream, UdpSocket, SocketAddr, SocketAddrV4};
 use std::io::prelude::*;
 use std::io;
 use crate::rules::{Protocol, Rule};
@@ -16,7 +16,7 @@ pub enum WorkerMsgInbound {
     HandleTcp(TcpStream),
 
     // ask the worker to temporarily handle this udp socket
-    HandleUdp(UdpSocket)
+    HandleUdp(StatedUdpSocket)
 }
 
 /// Data type sent by a worker's tx
@@ -28,7 +28,14 @@ pub enum WorkerMsgOutbound {
     ReturnTcp(TcpStream),
 
     // the worker is done with this udp socket
-    ReturnUdp(UdpSocket)
+    ReturnUdp(StatedUdpSocket)
+}
+
+/// A container for a UdpSocket, which also contains the address of the
+/// most recent incomming connection (incomming to the proxy server)
+pub struct StatedUdpSocket {
+    pub socket: UdpSocket,
+    pub last_client: Option<SocketAddrV4>
 }
 
 /// A worker responsible for handling packet forwarding
@@ -47,15 +54,16 @@ impl Worker {
                 let msg = rx.recv().unwrap();
                 match msg {
                     WorkerMsgInbound::HandleTcp(stream) => {
+                        // if a tcp stream is returned (and not None), return it to the main thr
                         match handle_tcp(stream, &rules) {
                             Some(s) => tx.send(WorkerMsgOutbound::ReturnTcp(s)).unwrap(),
                             None => ()
                         }
                     },
-                    WorkerMsgInbound::HandleUdp(socket) => {
-                        // when finished handling the udp socket it is returned
-                        handle_udp(&socket);
-                        tx.send(WorkerMsgOutbound::ReturnUdp(socket)).unwrap();
+                    WorkerMsgInbound::HandleUdp(stated_socket) => {
+                        // when finished handling the udp stated_socket it is returned to main thr
+                        let stated_socket = handle_udp(stated_socket, &rules);
+                        tx.send(WorkerMsgOutbound::ReturnUdp(stated_socket)).unwrap();
                     }
                 }
 
@@ -145,8 +153,61 @@ fn handle_tcp (mut stream: TcpStream, rules: &Vec<Rule>) -> Option<TcpStream> {
 }
 
 /// Called by a worker to handle a udp socket
-fn handle_udp (socket: &UdpSocket) {
+/// Always returns the socket after we are done
+fn handle_udp (mut stated_socket: StatedUdpSocket, rules: &Vec<Rule>) -> StatedUdpSocket {
+    // match with a rule
+    let local_addr = match stated_socket.socket.local_addr() {
+        Ok(addr) => addr,
+        Err(_) => { return stated_socket; }
+    };
 
+    let rule = match match_rule(Protocol::UDP, local_addr.port(), rules) {
+        Some(rule) => rule,
+        None => { return stated_socket; }
+    };
+
+    // read all there is to read
+    let mut buf = [0; 65535];
+    let mut last_len = 1;
+    let mut from_addr: Option<SocketAddr> = None;
+    while last_len > 0 {
+        // hangs here!
+        let res = stated_socket.socket.recv_from(&mut buf);
+        if res.is_err() {
+            break;
+        }
+        let (len, from) = res.unwrap();
+
+        last_len = len;
+        from_addr = Some(from);
+    }
+
+    if buf.len() < 1 || from_addr == None {
+        // no data
+        return stated_socket;
+    }
+
+    // get the socket address of the sender
+    let from = match from_addr.unwrap() {
+        SocketAddr::V4(addr) => addr,
+        _ => { return stated_socket; }
+    };
+
+    if from == rule.target_address {
+        // datagram is coming from the target, attempt to send it to the most recent client
+        if stated_socket.last_client != None {
+            let last_client = stated_socket.last_client.unwrap();
+            stated_socket.socket.send_to(&buf, last_client).ok();
+        }
+    } else {
+        // datagram is not coming from the target, so send it to the target
+        stated_socket.socket.send_to(&buf, rule.target_address).ok();
+
+        // record this address as the most recent client
+        stated_socket.last_client = Some(from);
+    }
+
+    stated_socket
 }
 
 /// Match a rule by port, returning a Rule or None
