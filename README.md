@@ -1,5 +1,5 @@
-# roxy
-A rust learning experience.
+# roxy (rust tcp/udp proxy)
+I learned a lot making this, and I didn't expect it to be as fast as it is. I tested it proxying connections to game servers on a beaglebone with a 1ghz processor and 512mb of memory and encountered very little lag. Rust is awesome!
 
 ```
 ROXY Help:
